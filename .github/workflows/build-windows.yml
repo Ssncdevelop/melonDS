@@ -50,10 +50,32 @@ jobs:
       run: unset PKG_CONFIG_PATH; cmake --preset=release-mingw-x86_64 -DMELONDS_EMBED_BUILD_INFO=ON
     - name: Build
       run: unset PKG_CONFIG_PATH; cmake --build --preset=release-mingw-x86_64
+    # The exe links the vcpkg packages statically; their licenses ask for their
+    # notices to go with the binary. vcpkg leaves each one in share/<port>/copyright.
+    - name: Collect third-party notices
+      run: |
+        inst=$(find build -type d -path '*vcpkg_installed/x64-mingw-static-release' | head -n 1)
+        echo "vcpkg installed dir: $inst"
+        {
+          echo "Third-party software built by vcpkg and linked statically into melonDS.exe"
+          echo "(one section per vcpkg port, from its share/<port>/copyright)."
+          echo
+          for d in "$inst"/share/*/; do
+            [ -f "$d/copyright" ] || continue
+            echo "======================================================================"
+            basename "$d"
+            echo "======================================================================"
+            cat "$d/copyright"
+            echo
+          done
+        } > THIRD-PARTY-NOTICES-vcpkg.txt
+        ls "$inst"/share || true
     - uses: actions/upload-artifact@v4
       with:
         name: melonDS-windows-x86_64
-        path: .\build\release-mingw-x86_64\melonDS.exe
+        path: |
+          .\build\release-mingw-x86_64\melonDS.exe
+          THIRD-PARTY-NOTICES-vcpkg.txt
     - name: Save vcpkg cache
       # also when the build fails, so a retry does not compile Qt again
       if: always()
