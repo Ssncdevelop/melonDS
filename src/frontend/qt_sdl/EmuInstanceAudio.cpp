@@ -521,7 +521,11 @@ void EmuInstance::audioUpdateMusicClock(bool speedChanged)
     if (!speedChanged || !audioKeepMusicSpeed || !nds)
     {
         musicClockActive = false;
-        if (nds) nds->SetSoundClockRate(1.0);
+        if (nds)
+        {
+            nds->SetSoundClockRate(1.0);
+            nds->SetSpeedHint(1.0);
+        }
         return;
     }
 
@@ -542,6 +546,9 @@ void EmuInstance::audioUpdateMusicClock(bool speedChanged)
     musicLastTime = now;
 
     double ratio = std::min(nominal, musicMeasuredRatio);
+
+    // tell the game how much faster than its sounds it is running
+    nds->SetSpeedHint(ratio);
 
     // nudge toward a steady amount of buffered audio: too much buffered ->
     // produce less audio per frame (higher ratio), too little -> more.

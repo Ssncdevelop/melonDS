@@ -276,6 +276,7 @@ public: // TODO: Encapsulate the rest of these members
     Timer Timers[8];
     u32 SoundClockRate = 0x10000; // 16.16 fixed point, see SetSoundClockRate()
     u32 SoundClockFrac[4] = {};
+    u16 SpeedHint = 0x0100; // 8.8 fixed point, see SetSpeedHint()
 
     u32 CPUStop;
 
@@ -421,6 +422,14 @@ public: // TODO: Encapsulate the rest of these members
     // 1.0 = hardware. 0.25 = sound runs at quarter speed, so that at 4x
     // fast-forward the music still plays at normal speed.
     void SetSoundClockRate(double rate);
+
+    // Speed hint for the running program: a 32-bit read of 0x04FFFA40
+    // (unused on hardware, reads 0 there and in other emulators) returns
+    // 0x5350 ("SP") in the upper half and the current speed in 8.8 fixed
+    // point in the lower half (0x0100 = normal speed), while the sound clock
+    // is scaled. A game can use it to skip waits on sounds that play on real
+    // time during fast-forward.
+    void SetSpeedHint(double ratio);
 
     void RegisterEventFuncs(u32 id, void* that, const std::initializer_list<EventFunc>& funcs);
     void UnregisterEventFuncs(u32 id);

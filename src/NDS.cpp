@@ -1685,6 +1685,11 @@ void NDS::SetSoundClockRate(double rate)
     SPU.SetClockRate(fixed);
 }
 
+void NDS::SetSpeedHint(double ratio)
+{
+    SpeedHint = (u16)std::clamp(ratio * 256.0 + 0.5, 1.0, 65535.0);
+}
+
 const s32 TimerPrescaler[4] = {0, 6, 8, 10};
 
 u16 NDS::TimerGetCounter(u32 timer)
@@ -3197,6 +3202,9 @@ u32 NDS::ARM9IORead32(u32 addr)
     // Since it's a 64 bit reg. the CPU will access it in two parts:
     case 0x04FFFA20: return (u32)(GetSysClockCycles(0) & 0xFFFFFFFF);
     case 0x04FFFA24: return (u32)(GetSysClockCycles(0) >> 32);
+
+    // speed hint, see NDS::SetSpeedHint
+    case 0x04FFFA40: return (0x5350u << 16) | SpeedHint;
     }
 
     if ((addr >= 0x04000000 && addr < 0x04000060) || (addr == 0x0400006C))

@@ -40,13 +40,28 @@ Limits:
   timing could misbehave while fast-forwarding. If that happens, turn the option off —
   melonDS then behaves exactly as before.
 
+## For ROM hacks and homebrew: speed hint
+
+Because sounds keep real time while fast-forwarding, a game that waits for a fanfare or
+a cry to end still waits for its full length. A program can ask how fast it is being run
+and skip such waits:
+
+- A 32-bit read of **`0x04FFFA40`** (ARM9) returns `0x5350` ("SP") in the upper 16 bits and
+  the current speed in 8.8 fixed point in the lower 16 bits (`0x0100` = normal speed,
+  `0x0400` = 4×) while "Keep music at normal speed" is in effect.
+- The address is unused on hardware; real hardware and other emulators read `0` there,
+  so a program that checks for `0x5350` behaves as before everywhere else.
+
 ## Source
 
-This branch is the melonDS **1.1** tag plus one commit. The same change as a patch file:
+This branch is the melonDS **1.1** tag plus two commits (the music change and the speed
+hint). The same changes as a patch file:
 [`keep-music-speed.patch`](keep-music-speed.patch) — apply it to a 1.1 checkout with
 `git am`, `git apply` or `patch -p1`, then build as described in `BUILD.md`.
-The Windows exe in Releases is built by this repository's GitHub Actions workflow
-(the one melonDS uses for its official builds).
+The Windows exe in Releases is built by this repository's GitHub Actions workflow —
+melonDS 1.1's own Windows workflow with one fix: it clears MSYS2's `PKG_CONFIG_PATH` so
+that the static link uses vcpkg's libraries (MSYS2's current libarchive no longer links
+statically), and it keeps the vcpkg cache even when a build fails.
 
 Files changed: `src/NDS.cpp`, `src/NDS.h`, `src/SPU.cpp`, `src/SPU.h`, and
 `src/frontend/qt_sdl/` `AudioSettingsDialog.cpp/.h/.ui`, `Config.cpp`, `EmuInstance.h`,
@@ -71,7 +86,8 @@ No warranty.
 - 배율: **Config → Interface settings → Fast-forward FPS**(240 = 4배).
 - 단축키: "Fast forward"는 누르고 있는 동안, "Toggle fast forward"는 한 번 눌러 켜고 끕니다.
 - 배속 중에는 ARM7 타이머 넷이 함께 느려집니다. 닌텐도 표준 SDK 사운드를 쓰는 게임에 맞춘 방식이라, ARM7 타이머를 다른 용도로 쓰는 게임은 배속 중 이상할 수 있습니다. 그때는 옵션을 끄면 원래 melonDS와 같습니다.
-- 소스: 이 브랜치 = melonDS 1.1 + 커밋 하나. 같은 변경을 패치 파일 `keep-music-speed.patch`로도 둡니다.
+- 롬핵·홈브루용: 배속 중 `0x04FFFA40`을 32비트로 읽으면 위 16비트 `0x5350`, 아래 16비트에 현재 배속(8.8 고정소수, `0x0100` = 1배)이 나옵니다. 팡파르·울음소리 기다림을 배속 중에 건너뛰는 데 씁니다. 실기와 다른 에뮬레이터에서는 0이 나옵니다.
+- 소스: 이 브랜치 = melonDS 1.1 + 커밋 둘(음악 유지, 배속 신호). 같은 변경을 패치 파일 `keep-music-speed.patch`로도 둡니다.
 - 라이선스: melonDS와 같은 **GPL-3.0-or-later**. 보증 없음.
 
 ---

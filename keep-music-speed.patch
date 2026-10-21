@@ -1,8 +1,8 @@
 From 8a27a4fc538ca2b5c1c2001b0b28c826dfc1092c Mon Sep 17 00:00:00 2001
 From: anonymous <anonymous@invalid>
 Date: Wed, 21 Oct 2026 00:00:00 +0000
-Subject: [PATCH] Keep music at normal speed while fast-forwarding / in slow
- motion
+Subject: [PATCH 1/2] Keep music at normal speed while fast-forwarding / in
+ slow motion
 
 When fast-forwarding, melonDS runs the whole console faster, so music
 and sound effects play faster and higher. This adds an option to keep
@@ -467,3 +467,106 @@ index 9b3ab95..4afda5c 100755
      if (!emuThread->emuIsActive()) return;
      assert(emuInstance->nds != nullptr);
  
+
+From 866539dfd873115d452e6166bfc81bd70b4f8f6c Mon Sep 17 00:00:00 2001
+From: anonymous <anonymous@invalid>
+Date: Wed, 21 Oct 2026 00:00:00 +0000
+Subject: [PATCH 2/2] Speed hint: let the running program know it is being
+ fast-forwarded
+
+While the sound clock is scaled (fast-forward or slow motion with "Keep
+music at normal speed" on), a 32-bit read of 0x04FFFA40 returns 0x5350
+("SP") in the upper half and the current speed in 8.8 fixed point in the
+lower half (0x0100 = normal speed). The address is unused on hardware;
+there and in other emulators it reads 0.
+
+Sounds now keep real time during fast-forward, so a game that waits for
+a fanfare or a cry to end holds the sped-up game for the sound's full
+length. With this hint a game (for example a ROM hack) can skip such
+waits while fast-forwarding and behave as before everywhere else.
+---
+ src/NDS.cpp                              | 8 ++++++++
+ src/NDS.h                                | 9 +++++++++
+ src/frontend/qt_sdl/EmuInstanceAudio.cpp | 9 ++++++++-
+ 3 files changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/src/NDS.cpp b/src/NDS.cpp
+index 19cacf8..734f93f 100644
+--- a/src/NDS.cpp
++++ b/src/NDS.cpp
+@@ -1685,6 +1685,11 @@ void NDS::SetSoundClockRate(double rate)
+     SPU.SetClockRate(fixed);
+ }
+ 
++void NDS::SetSpeedHint(double ratio)
++{
++    SpeedHint = (u16)std::clamp(ratio * 256.0 + 0.5, 1.0, 65535.0);
++}
++
+ const s32 TimerPrescaler[4] = {0, 6, 8, 10};
+ 
+ u16 NDS::TimerGetCounter(u32 timer)
+@@ -3197,6 +3202,9 @@ u32 NDS::ARM9IORead32(u32 addr)
+     // Since it's a 64 bit reg. the CPU will access it in two parts:
+     case 0x04FFFA20: return (u32)(GetSysClockCycles(0) & 0xFFFFFFFF);
+     case 0x04FFFA24: return (u32)(GetSysClockCycles(0) >> 32);
++
++    // speed hint, see NDS::SetSpeedHint
++    case 0x04FFFA40: return (0x5350u << 16) | SpeedHint;
+     }
+ 
+     if ((addr >= 0x04000000 && addr < 0x04000060) || (addr == 0x0400006C))
+diff --git a/src/NDS.h b/src/NDS.h
+index af4b06f..371195c 100644
+--- a/src/NDS.h
++++ b/src/NDS.h
+@@ -276,6 +276,7 @@ public: // TODO: Encapsulate the rest of these members
+     Timer Timers[8];
+     u32 SoundClockRate = 0x10000; // 16.16 fixed point, see SetSoundClockRate()
+     u32 SoundClockFrac[4] = {};
++    u16 SpeedHint = 0x0100; // 8.8 fixed point, see SetSpeedHint()
+ 
+     u32 CPUStop;
+ 
+@@ -422,6 +423,14 @@ public: // TODO: Encapsulate the rest of these members
+     // fast-forward the music still plays at normal speed.
+     void SetSoundClockRate(double rate);
+ 
++    // Speed hint for the running program: a 32-bit read of 0x04FFFA40
++    // (unused on hardware, reads 0 there and in other emulators) returns
++    // 0x5350 ("SP") in the upper half and the current speed in 8.8 fixed
++    // point in the lower half (0x0100 = normal speed), while the sound clock
++    // is scaled. A game can use it to skip waits on sounds that play on real
++    // time during fast-forward.
++    void SetSpeedHint(double ratio);
++
+     void RegisterEventFuncs(u32 id, void* that, const std::initializer_list<EventFunc>& funcs);
+     void UnregisterEventFuncs(u32 id);
+     void ScheduleEvent(u32 id, bool periodic, s32 delay, u32 funcid, u32 param);
+diff --git a/src/frontend/qt_sdl/EmuInstanceAudio.cpp b/src/frontend/qt_sdl/EmuInstanceAudio.cpp
+index f012d1d..1f2ecca 100644
+--- a/src/frontend/qt_sdl/EmuInstanceAudio.cpp
++++ b/src/frontend/qt_sdl/EmuInstanceAudio.cpp
+@@ -521,7 +521,11 @@ void EmuInstance::audioUpdateMusicClock(bool speedChanged)
+     if (!speedChanged || !audioKeepMusicSpeed || !nds)
+     {
+         musicClockActive = false;
+-        if (nds) nds->SetSoundClockRate(1.0);
++        if (nds)
++        {
++            nds->SetSoundClockRate(1.0);
++            nds->SetSpeedHint(1.0);
++        }
+         return;
+     }
+ 
+@@ -543,6 +547,9 @@ void EmuInstance::audioUpdateMusicClock(bool speedChanged)
+ 
+     double ratio = std::min(nominal, musicMeasuredRatio);
+ 
++    // tell the game how much faster than its sounds it is running
++    nds->SetSpeedHint(ratio);
++
+     // nudge toward a steady amount of buffered audio: too much buffered ->
+     // produce less audio per frame (higher ratio), too little -> more.
+     // This only changes how much sound time one emulated frame covers; the
