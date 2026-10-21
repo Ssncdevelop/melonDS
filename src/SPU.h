@@ -256,6 +256,10 @@ public:
     void SetOutputSampleRate(double rate);
     void SetOutputSkew(double skew);
 
+    // 16.16 fixed point fraction of emulated time the channels and capture
+    // units run at (see NDS::SetSoundClockRate)
+    void SetClockRate(u32 rate) { ClockRate = rate; }
+
     u8 Read8(u32 addr);
     u16 Read16(u32 addr);
     u32 Read32(u32 addr);
@@ -279,6 +283,8 @@ private:
     s16 OutputLastSamples[2];
 
     u32 MixInterval;
+    u32 ClockRate = 0x10000;
+    u32 ClockFrac = 0;
 
     Platform::Mutex* AudioLock;
 

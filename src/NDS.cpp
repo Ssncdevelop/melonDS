@@ -1640,7 +1640,15 @@ void NDS::RunTimer(u32 tid, s32 cycles)
 {
     Timer* timer = &Timers[tid];
 
-    timer->Counter += (cycles << timer->CycleShift);
+    u32 inc = cycles << timer->CycleShift;
+    if (tid >= 4 && SoundClockRate != 0x10000)
+    {
+        u64 scaled = (u64)inc * SoundClockRate + SoundClockFrac[tid - 4];
+        inc = (u32)(scaled >> 16);
+        SoundClockFrac[tid - 4] = (u32)(scaled & 0xFFFF);
+    }
+
+    timer->Counter += inc;
     while (timer->Counter >> 26)
     {
         timer->Counter -= (1 << 26);
@@ -1664,6 +1672,17 @@ void NDS::RunTimers(u32 cpu)
     if (timermask & 0x8) RunTimer((cpu<<2)+3, cycles);
 
     TimerTimestamp[cpu] += cycles;
+}
+
+void NDS::SetSoundClockRate(double rate)
+{
+    u32 fixed = (u32)std::clamp(rate * 65536.0 + 0.5, 1.0, (double)0x100000);
+    if (fixed == SoundClockRate) return;
+
+    // bring the ARM7 timers up to date at the old rate first
+    RunTimers(1);
+    SoundClockRate = fixed;
+    SPU.SetClockRate(fixed);
 }
 
 const s32 TimerPrescaler[4] = {0, 6, 8, 10};

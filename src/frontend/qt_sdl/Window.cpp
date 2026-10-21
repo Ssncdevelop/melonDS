@@ -1975,6 +1975,8 @@ void MainWindow::onUpdateAudioVolume(int vol, int dsisync)
 
 void MainWindow::onUpdateAudioSettings()
 {
+    emuInstance->audioKeepMusicSpeed = globalCfg.GetBool("Audio.KeepMusicSpeed");
+
     if (!emuThread->emuIsActive()) return;
     assert(emuInstance->nds != nullptr);
 

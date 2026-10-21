@@ -274,6 +274,8 @@ public: // TODO: Encapsulate the rest of these members
     u32 IE2;
     u32 IF2;
     Timer Timers[8];
+    u32 SoundClockRate = 0x10000; // 16.16 fixed point, see SetSoundClockRate()
+    u32 SoundClockFrac[4] = {};
 
     u32 CPUStop;
 
@@ -413,6 +415,12 @@ public: // TODO: Encapsulate the rest of these members
 
     bool IsLidClosed() const;
     void SetLidClosed(bool closed);
+
+    // Sound clock: the ARM7 timers (which drive the SDK's sound alarm and thus
+    // the sequencer) and the SPU run at this fraction of emulated time.
+    // 1.0 = hardware. 0.25 = sound runs at quarter speed, so that at 4x
+    // fast-forward the music still plays at normal speed.
+    void SetSoundClockRate(double rate);
 
     void RegisterEventFuncs(u32 id, void* that, const std::initializer_list<EventFunc>& funcs);
     void UnregisterEventFuncs(u32 id);

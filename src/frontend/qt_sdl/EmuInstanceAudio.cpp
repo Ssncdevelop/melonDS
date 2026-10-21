@@ -35,6 +35,10 @@ void EmuInstance::audioInit()
 {
     audioVolume = localCfg.GetInt("Audio.Volume");
     audioDSiVolumeSync = localCfg.GetBool("Audio.DSiVolumeSync");
+    audioKeepMusicSpeed = globalCfg.GetBool("Audio.KeepMusicSpeed");
+    musicClockActive = false;
+    musicMeasuredRatio = 1.0;
+    musicLastTime = 0.0;
 
     audioMuted = false;
     audioSyncCond = SDL_CreateCond();
@@ -139,6 +143,10 @@ void EmuInstance::audioSync()
 
 int EmuInstance::audioGetNumSamplesOut(int outlen)
 {
+    // the sound clock is already scaled to real time (audioUpdateMusicClock)
+    if (musicClockActive)
+        return outlen;
+
     float f_len_in = outlen * (curFPS/targetFPS);
     f_len_in += audioSampleFrac;
     int len_in = (int)floor(f_len_in);
@@ -494,8 +502,59 @@ void EmuInstance::audioUpdateSettings()
         nds->SPU.SetInterpolation(static_cast<AudioInterpolation>(audiointerp));
     }
 
+    audioKeepMusicSpeed = globalCfg.GetBool("Audio.KeepMusicSpeed");
+
     setupMicInputData();
     if (micStarted) micOpen();
+}
+
+// Keep music at normal speed while fast-forwarding or in slow motion.
+// The DS plays music on the ARM7: a periodic alarm (ARM7 timers) steps the
+// sequencer, and the SPU plays the notes. Running both at 1/ratio of emulated
+// time, where ratio is how much faster than real time the emulation runs,
+// puts them back on real time -- while the game logic still runs fast.
+// Called once per emulated frame.
+void EmuInstance::audioUpdateMusicClock(bool speedChanged)
+{
+    double now = SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency();
+
+    if (!speedChanged || !audioKeepMusicSpeed || !nds)
+    {
+        musicClockActive = false;
+        if (nds) nds->SetSoundClockRate(1.0);
+        return;
+    }
+
+    // one emulated frame is 1/INTERNAL_FRAME_RATE seconds of DS time
+    double nominal = curFPS / INTERNAL_FRAME_RATE;
+    if (!musicClockActive)
+    {
+        musicClockActive = true;
+        musicMeasuredRatio = nominal;
+    }
+    else
+    {
+        // how fast the emulation actually runs (it may not reach the target)
+        double dt = now - musicLastTime;
+        if (dt > 0.0 && dt < 0.5)
+            musicMeasuredRatio += ((1.0 / dt) / INTERNAL_FRAME_RATE - musicMeasuredRatio) * 0.05;
+    }
+    musicLastTime = now;
+
+    double ratio = std::min(nominal, musicMeasuredRatio);
+
+    // nudge toward a steady amount of buffered audio: too much buffered ->
+    // produce less audio per frame (higher ratio), too little -> more.
+    // This only changes how much sound time one emulated frame covers; the
+    // sequencer and the SPU both run on the scaled clock, so what is heard
+    // keeps its tempo and pitch whatever the ratio.
+    double target = audioFreq / INTERNAL_FRAME_RATE + audioBufSize / 2;
+    double fill = nds->SPU.GetOutputSize();
+    ratio *= std::clamp(1.0 + 0.25 * (fill - target) / target, 0.8, 1.25);
+
+    // the default fast-forward target (1000 FPS) is ~16.7x, so leave headroom
+    ratio = std::clamp(ratio, 1.0 / 16.0, 64.0);
+    nds->SetSoundClockRate(1.0 / ratio);
 }
 
 void EmuInstance::audioEnable()

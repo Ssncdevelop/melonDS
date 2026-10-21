@@ -69,6 +69,16 @@
          </property>
         </widget>
       </item>
+      <item row="4" column="0" colspan="2">
+       <widget class="QCheckBox" name="chkKeepMusicSpeed">
+        <property name="whatsThis">
+         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;While fast-forwarding or in slow motion, runs the DS sound hardware (ARM7 timers and SPU) on real time, so music and sound effects keep their normal speed and pitch while the game runs faster or slower.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+        </property>
+        <property name="text">
+         <string>Keep music at normal speed when fast-forwarding / in slow motion</string>
+        </property>
+       </widget>
+      </item>
       <item row="0" column="0">
        <widget class="QLabel" name="label_2">
         <property name="text">

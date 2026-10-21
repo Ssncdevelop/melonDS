@@ -111,6 +111,7 @@ DefaultList<bool> DefaultBools =
 #endif
 #endif
     {"DSi.DSP.HLE", true},
+    {"Audio.KeepMusicSpeed", true},
 };
 
 DefaultList<std::string> DefaultStrings =

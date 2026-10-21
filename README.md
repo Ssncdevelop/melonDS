@@ -1,3 +1,81 @@
+# melonDS 1.1 — Keep music at normal speed while fast-forwarding
+
+An unofficial build of [melonDS](https://github.com/melonDS-emu/melonDS) **1.1** with one change.
+It is not part of melonDS and is not endorsed by the melonDS team.
+The original melonDS README follows further below.
+
+(한국어 설명은 아래에 있습니다.)
+
+## Download
+
+**Releases** (right side of this page) → `melonDS.exe` (Windows x64, single file).
+Put it in a folder of its own, or replace the `melonDS.exe` of an official 1.1 download —
+your `melonDS.toml` settings keep working.
+
+## What it does
+
+In stock melonDS, fast-forward speeds up the whole console, so music and sound effects
+play faster and higher. With this change the game runs fast (or slow, in slow motion) while
+music and sound effects keep their **normal speed and pitch**.
+
+DS games play music on the ARM7: a periodic alarm driven by the ARM7 hardware timers
+steps the sound sequencer about every 5.2 ms, and the SPU plays the notes. While
+fast-forward or slow motion is active, only the ARM7 timers and the SPU run at 1/N of
+emulated time, where N is how much faster than real time the emulation actually runs.
+The sound hardware stays on real time; everything else runs at the chosen speed.
+No ROM changes are needed.
+
+- Option: **Config → Audio settings → "Keep music at normal speed when fast-forwarding /
+  in slow motion"** (on by default). Turned off, melonDS behaves exactly as before.
+- Speed: **Config → Interface settings → Fast-forward FPS** (e.g. 240 = 4×).
+- Hotkeys: "Fast forward" works while held; "Toggle fast forward" switches on and off.
+
+Limits:
+- Where a game waits for a sound to finish (for example a cry), that wait takes real
+  time, so those moments are not sped up.
+- If your PC cannot reach the fast-forward target, the speed actually reached is followed.
+- DSi-mode DSP audio is not covered.
+- While the option is active, all four ARM7 timers run slower. This fits games built on
+  Nintendo's standard SDK sound system; a game whose ARM7 uses its timers for other
+  timing could misbehave while fast-forwarding. If that happens, turn the option off —
+  melonDS then behaves exactly as before.
+
+## Source
+
+This branch is the melonDS **1.1** tag plus one commit. The same change as a patch file:
+[`keep-music-speed.patch`](keep-music-speed.patch) — apply it to a 1.1 checkout with
+`git am`, `git apply` or `patch -p1`, then build as described in `BUILD.md`.
+The Windows exe in Releases is built by this repository's GitHub Actions workflow
+(the one melonDS uses for its official builds).
+
+Files changed: `src/NDS.cpp`, `src/NDS.h`, `src/SPU.cpp`, `src/SPU.h`, and
+`src/frontend/qt_sdl/` `AudioSettingsDialog.cpp/.h/.ui`, `Config.cpp`, `EmuInstance.h`,
+`EmuInstanceAudio.cpp`, `EmuThread.cpp`, `Window.cpp`.
+
+## License
+
+melonDS is licensed under the GNU General Public License, version 3 or later (`LICENSE`).
+This change modifies melonDS 1.1 (October 2026) and is distributed under the same license,
+**GPL-3.0-or-later**. The copyright notices in the melonDS source are unchanged.
+No warranty.
+
+## 한국어
+
+**melonDS 1.1에 기능 하나를 더한 비공식 빌드**입니다. melonDS 팀이 만든 것이 아닙니다.
+
+원래 melonDS는 배속하면 기기 전체가 빨라져 음악·효과음도 빠르고 높아집니다. 이 빌드에서는
+게임은 빠르게(슬로모션이면 느리게) 돌고, **음악·효과음은 원래 빠르기와 음높이**로 나옵니다.
+
+- 받기: 오른쪽 **Releases** → `melonDS.exe`. 새 폴더에 두거나 공식 1.1의 `melonDS.exe`와 바꿔 넣으면 됩니다(설정 파일 그대로 사용).
+- 켜고 끄기: **Config → Audio settings → "Keep music at normal speed…"**(기본 켬). 끄면 원래 melonDS와 같습니다.
+- 배율: **Config → Interface settings → Fast-forward FPS**(240 = 4배).
+- 단축키: "Fast forward"는 누르고 있는 동안, "Toggle fast forward"는 한 번 눌러 켜고 끕니다.
+- 배속 중에는 ARM7 타이머 넷이 함께 느려집니다. 닌텐도 표준 SDK 사운드를 쓰는 게임에 맞춘 방식이라, ARM7 타이머를 다른 용도로 쓰는 게임은 배속 중 이상할 수 있습니다. 그때는 옵션을 끄면 원래 melonDS와 같습니다.
+- 소스: 이 브랜치 = melonDS 1.1 + 커밋 하나. 같은 변경을 패치 파일 `keep-music-speed.patch`로도 둡니다.
+- 라이선스: melonDS와 같은 **GPL-3.0-or-later**. 보증 없음.
+
+---
+
 <p align="center"><img src="https://raw.githubusercontent.com/melonDS-emu/melonDS/master/res/icon/melon_128x128.png"></p>
 <h2 align="center"><b>melonDS</b></h2>
 <p align="center">

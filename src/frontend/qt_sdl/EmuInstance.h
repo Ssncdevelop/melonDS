@@ -20,6 +20,7 @@
 #define EMUINSTANCE_H
 
 #include <SDL2/SDL.h>
+#include <atomic>
 
 #include "Platform.h"
 #include "main.h"
@@ -225,6 +226,7 @@ private:
     void audioMute();
     void audioSync();
     void audioUpdateSettings();
+    void audioUpdateMusicClock(bool speedChanged);
 
     void micOpen();
     void micClose();
@@ -300,6 +302,7 @@ public:
     bool fastForwardToggled;
     bool slowmoToggled;
     bool doAudioSync;
+    bool audioKeepMusicSpeed;
 private:
 
     std::unique_ptr<melonDS::Savestate> backupState;
@@ -314,6 +317,12 @@ private:
     int audioBufSize;
     float audioSampleFrac;
     bool audioMuted;
+
+    // keep music at normal speed while fast-forwarding / in slow motion
+    std::atomic<bool> musicClockActive; // also read by the audio callback
+    double musicMeasuredRatio;
+    double musicLastTime;
+
     SDL_cond* audioSyncCond;
     SDL_mutex* audioSyncLock;
 

@@ -47,6 +47,7 @@ AudioSettingsDialog::AudioSettingsDialog(QWidget* parent) : QDialog(parent), ui(
     oldBitDepth = cfg.GetInt("Audio.BitDepth");
     oldVolume = instcfg.GetInt("Audio.Volume");
     oldDSiSync = instcfg.GetBool("Audio.DSiVolumeSync");
+    oldKeepMusicSpeed = cfg.GetBool("Audio.KeepMusicSpeed");
 
     volume = oldVolume;
     dsiSync = oldDSiSync;
@@ -68,6 +69,7 @@ AudioSettingsDialog::AudioSettingsDialog(QWidget* parent) : QDialog(parent), ui(
     ui->slVolume->blockSignals(state);
 
     ui->chkSyncDSiVolume->setChecked(oldDSiSync);
+    ui->chkKeepMusicSpeed->setChecked(oldKeepMusicSpeed);
 
     // Setup volume slider accordingly
     if (emuActive && emuInstance->getNDS()->ConsoleType == 1)
@@ -122,6 +124,7 @@ AudioSettingsDialog::AudioSettingsDialog(QWidget* parent) : QDialog(parent), ui(
         ui->lblInstanceNum->setText(QString("Configuring settings for instance %1").arg(inst+1));
         ui->cbInterpolation->setEnabled(false);
         ui->cbBitDepth->setEnabled(false);
+        ui->chkKeepMusicSpeed->setEnabled(false);
         for (QAbstractButton* btn : grpMicMode->buttons())
             btn->setEnabled(false);
         ui->txtMicWavPath->setEnabled(false);
@@ -182,6 +185,7 @@ void AudioSettingsDialog::on_AudioSettingsDialog_rejected()
     cfg.SetInt("Audio.BitDepth", oldBitDepth);
     instcfg.SetInt("Audio.Volume", oldVolume);
     instcfg.SetBool("Audio.DSiVolumeSync", oldDSiSync);
+    cfg.SetBool("Audio.KeepMusicSpeed", oldKeepMusicSpeed);
 
     emit updateAudioVolume(oldVolume, oldDSiSync);
     emit updateAudioSettings();
@@ -255,6 +259,14 @@ void AudioSettingsDialog::on_chkSyncDSiVolume_clicked(bool checked)
     ui->slVolume->blockSignals(state);
 
     emit updateAudioVolume(volume, dsiSync);
+}
+
+void AudioSettingsDialog::on_chkKeepMusicSpeed_clicked(bool checked)
+{
+    auto& cfg = emuInstance->getGlobalConfig();
+    cfg.SetBool("Audio.KeepMusicSpeed", checked);
+
+    emit updateAudioSettings();
 }
 
 void AudioSettingsDialog::onChangeMicMode(int mode)

@@ -1,0 +1,469 @@
+From 8a27a4fc538ca2b5c1c2001b0b28c826dfc1092c Mon Sep 17 00:00:00 2001
+From: anonymous <anonymous@invalid>
+Date: Wed, 21 Oct 2026 00:00:00 +0000
+Subject: [PATCH] Keep music at normal speed while fast-forwarding / in slow
+ motion
+
+When fast-forwarding, melonDS runs the whole console faster, so music
+and sound effects play faster and higher. This adds an option to keep
+them at their normal speed and pitch while the game itself runs fast
+(or slow).
+
+How it works: DS games play music on the ARM7. A periodic OS alarm,
+driven by the ARM7 hardware timers, steps the sound sequencer about
+every 5.2 ms, and the SPU plays the notes. A new "sound clock" runs the
+ARM7 timers and the SPU (channels, capture units and the output
+timeline) at a fraction of emulated time. While fast-forward or slow
+motion is active, the frontend sets that fraction to 1/ratio every
+frame, where ratio is how much faster than real time the emulation is
+actually running (capped by the fast-forward target and nudged by the
+output buffer fill). The sound hardware then runs on real time while
+the ARM9 and everything else run at the chosen speed.
+
+Option: Audio settings > "Keep music at normal speed when
+fast-forwarding / in slow motion" (Audio.KeepMusicSpeed, default on).
+With the option off, or at normal speed, the code paths are unchanged.
+
+Notes:
+- Waits on sound (e.g. a game waiting for a cry to finish) take real
+  time, so those moments are not sped up.
+- DSi-mode DSP audio is not covered.
+---
+ src/NDS.cpp                                 | 21 +++++++-
+ src/NDS.h                                   |  8 +++
+ src/SPU.cpp                                 | 28 ++++++----
+ src/SPU.h                                   |  6 +++
+ src/frontend/qt_sdl/AudioSettingsDialog.cpp | 12 +++++
+ src/frontend/qt_sdl/AudioSettingsDialog.h   |  2 +
+ src/frontend/qt_sdl/AudioSettingsDialog.ui  | 10 ++++
+ src/frontend/qt_sdl/Config.cpp              |  1 +
+ src/frontend/qt_sdl/EmuInstance.h           |  9 ++++
+ src/frontend/qt_sdl/EmuInstanceAudio.cpp    | 59 +++++++++++++++++++++
+ src/frontend/qt_sdl/EmuThread.cpp           |  2 +
+ src/frontend/qt_sdl/Window.cpp              |  2 +
+ 12 files changed, 150 insertions(+), 10 deletions(-)
+
+diff --git a/src/NDS.cpp b/src/NDS.cpp
+index f45051e..19cacf8 100644
+--- a/src/NDS.cpp
++++ b/src/NDS.cpp
+@@ -1640,7 +1640,15 @@ void NDS::RunTimer(u32 tid, s32 cycles)
+ {
+     Timer* timer = &Timers[tid];
+ 
+-    timer->Counter += (cycles << timer->CycleShift);
++    u32 inc = cycles << timer->CycleShift;
++    if (tid >= 4 && SoundClockRate != 0x10000)
++    {
++        u64 scaled = (u64)inc * SoundClockRate + SoundClockFrac[tid - 4];
++        inc = (u32)(scaled >> 16);
++        SoundClockFrac[tid - 4] = (u32)(scaled & 0xFFFF);
++    }
++
++    timer->Counter += inc;
+     while (timer->Counter >> 26)
+     {
+         timer->Counter -= (1 << 26);
+@@ -1666,6 +1674,17 @@ void NDS::RunTimers(u32 cpu)
+     TimerTimestamp[cpu] += cycles;
+ }
+ 
++void NDS::SetSoundClockRate(double rate)
++{
++    u32 fixed = (u32)std::clamp(rate * 65536.0 + 0.5, 1.0, (double)0x100000);
++    if (fixed == SoundClockRate) return;
++
++    // bring the ARM7 timers up to date at the old rate first
++    RunTimers(1);
++    SoundClockRate = fixed;
++    SPU.SetClockRate(fixed);
++}
++
+ const s32 TimerPrescaler[4] = {0, 6, 8, 10};
+ 
+ u16 NDS::TimerGetCounter(u32 timer)
+diff --git a/src/NDS.h b/src/NDS.h
+index 17e656e..af4b06f 100644
+--- a/src/NDS.h
++++ b/src/NDS.h
+@@ -274,6 +274,8 @@ public: // TODO: Encapsulate the rest of these members
+     u32 IE2;
+     u32 IF2;
+     Timer Timers[8];
++    u32 SoundClockRate = 0x10000; // 16.16 fixed point, see SetSoundClockRate()
++    u32 SoundClockFrac[4] = {};
+ 
+     u32 CPUStop;
+ 
+@@ -414,6 +416,12 @@ public: // TODO: Encapsulate the rest of these members
+     bool IsLidClosed() const;
+     void SetLidClosed(bool closed);
+ 
++    // Sound clock: the ARM7 timers (which drive the SDK's sound alarm and thus
++    // the sequencer) and the SPU run at this fraction of emulated time.
++    // 1.0 = hardware. 0.25 = sound runs at quarter speed, so that at 4x
++    // fast-forward the music still plays at normal speed.
++    void SetSoundClockRate(double rate);
++
+     void RegisterEventFuncs(u32 id, void* that, const std::initializer_list<EventFunc>& funcs);
+     void UnregisterEventFuncs(u32 id);
+     void ScheduleEvent(u32 id, bool periodic, s32 delay, u32 funcid, u32 param);
+diff --git a/src/SPU.cpp b/src/SPU.cpp
+index 3c4aca7..1795da5 100644
+--- a/src/SPU.cpp
++++ b/src/SPU.cpp
+@@ -855,12 +855,22 @@ void SPU::Mix(u32 spucycles)
+     s32 left = 0, right = 0;
+     s32 leftoutput = 0, rightoutput = 0;
+ 
++    // sound clock: channels, capture and the output timeline advance by the
++    // scaled cycle count (see NDS::SetSoundClockRate)
++    u32 cycles = spucycles;
++    if (ClockRate != 0x10000)
++    {
++        u64 scaled = (u64)spucycles * ClockRate + ClockFrac;
++        cycles = (u32)(scaled >> 16);
++        ClockFrac = (u32)(scaled & 0xFFFF);
++    }
++
+     if (Cnt & (1<<15))
+     {
+-        s32 ch0 = Channels[0].DoRun(spucycles);
+-        s32 ch1 = Channels[1].DoRun(spucycles);
+-        s32 ch2 = Channels[2].DoRun(spucycles);
+-        s32 ch3 = Channels[3].DoRun(spucycles);
++        s32 ch0 = Channels[0].DoRun(cycles);
++        s32 ch1 = Channels[1].DoRun(cycles);
++        s32 ch2 = Channels[2].DoRun(cycles);
++        s32 ch3 = Channels[3].DoRun(cycles);
+ 
+         // TODO: addition from capture registers
+         Channels[0].PanOutput(ch0, left, right);
+@@ -873,7 +883,7 @@ void SPU::Mix(u32 spucycles)
+         {
+             SPUChannel* chan = &Channels[i];
+ 
+-            s32 channel = chan->DoRun(spucycles);
++            s32 channel = chan->DoRun(cycles);
+             chan->PanOutput(channel, left, right);
+         }
+ 
+@@ -888,7 +898,7 @@ void SPU::Mix(u32 spucycles)
+             if      (val < -0x8000) val = -0x8000;
+             else if (val > 0x7FFF)  val = 0x7FFF;
+ 
+-            Capture[0].Run(spucycles, val);
++            Capture[0].Run(cycles, val);
+         }
+ 
+         if (Capture[1].Cnt & (1<<7))
+@@ -899,7 +909,7 @@ void SPU::Mix(u32 spucycles)
+             if      (val < -0x8000) val = -0x8000;
+             else if (val > 0x7FFF)  val = 0x7FFF;
+ 
+-            Capture[1].Run(spucycles, val);
++            Capture[1].Run(cycles, val);
+         }
+ 
+         // final output
+@@ -984,7 +994,7 @@ void SPU::Mix(u32 spucycles)
+         output[1] = (s16)std::clamp(rightoutput, -0x8000, 0x7FFF);
+     }
+ 
+-    NDS.Mic.Advance(spucycles << 1);
++    NDS.Mic.Advance(cycles << 1);
+ 
+     if (NDS.ConsoleType == 1)
+     {
+@@ -1000,7 +1010,7 @@ void SPU::Mix(u32 spucycles)
+         output[1] &= 0xFFC0;
+     }
+ 
+-    BlipTimer += spucycles;
++    BlipTimer += cycles;
+     if (BlipTimer >= 8191 * 512)
+         BlipTimer = 8191 * 512;
+ 
+diff --git a/src/SPU.h b/src/SPU.h
+index ef7f895..9f9afa6 100644
+--- a/src/SPU.h
++++ b/src/SPU.h
+@@ -256,6 +256,10 @@ public:
+     void SetOutputSampleRate(double rate);
+     void SetOutputSkew(double skew);
+ 
++    // 16.16 fixed point fraction of emulated time the channels and capture
++    // units run at (see NDS::SetSoundClockRate)
++    void SetClockRate(u32 rate) { ClockRate = rate; }
++
+     u8 Read8(u32 addr);
+     u16 Read16(u32 addr);
+     u32 Read32(u32 addr);
+@@ -279,6 +283,8 @@ private:
+     s16 OutputLastSamples[2];
+ 
+     u32 MixInterval;
++    u32 ClockRate = 0x10000;
++    u32 ClockFrac = 0;
+ 
+     Platform::Mutex* AudioLock;
+ 
+diff --git a/src/frontend/qt_sdl/AudioSettingsDialog.cpp b/src/frontend/qt_sdl/AudioSettingsDialog.cpp
+index 9a13f4a..4353b90 100644
+--- a/src/frontend/qt_sdl/AudioSettingsDialog.cpp
++++ b/src/frontend/qt_sdl/AudioSettingsDialog.cpp
+@@ -47,6 +47,7 @@ AudioSettingsDialog::AudioSettingsDialog(QWidget* parent) : QDialog(parent), ui(
+     oldBitDepth = cfg.GetInt("Audio.BitDepth");
+     oldVolume = instcfg.GetInt("Audio.Volume");
+     oldDSiSync = instcfg.GetBool("Audio.DSiVolumeSync");
++    oldKeepMusicSpeed = cfg.GetBool("Audio.KeepMusicSpeed");
+ 
+     volume = oldVolume;
+     dsiSync = oldDSiSync;
+@@ -68,6 +69,7 @@ AudioSettingsDialog::AudioSettingsDialog(QWidget* parent) : QDialog(parent), ui(
+     ui->slVolume->blockSignals(state);
+ 
+     ui->chkSyncDSiVolume->setChecked(oldDSiSync);
++    ui->chkKeepMusicSpeed->setChecked(oldKeepMusicSpeed);
+ 
+     // Setup volume slider accordingly
+     if (emuActive && emuInstance->getNDS()->ConsoleType == 1)
+@@ -122,6 +124,7 @@ AudioSettingsDialog::AudioSettingsDialog(QWidget* parent) : QDialog(parent), ui(
+         ui->lblInstanceNum->setText(QString("Configuring settings for instance %1").arg(inst+1));
+         ui->cbInterpolation->setEnabled(false);
+         ui->cbBitDepth->setEnabled(false);
++        ui->chkKeepMusicSpeed->setEnabled(false);
+         for (QAbstractButton* btn : grpMicMode->buttons())
+             btn->setEnabled(false);
+         ui->txtMicWavPath->setEnabled(false);
+@@ -182,6 +185,7 @@ void AudioSettingsDialog::on_AudioSettingsDialog_rejected()
+     cfg.SetInt("Audio.BitDepth", oldBitDepth);
+     instcfg.SetInt("Audio.Volume", oldVolume);
+     instcfg.SetBool("Audio.DSiVolumeSync", oldDSiSync);
++    cfg.SetBool("Audio.KeepMusicSpeed", oldKeepMusicSpeed);
+ 
+     emit updateAudioVolume(oldVolume, oldDSiSync);
+     emit updateAudioSettings();
+@@ -257,6 +261,14 @@ void AudioSettingsDialog::on_chkSyncDSiVolume_clicked(bool checked)
+     emit updateAudioVolume(volume, dsiSync);
+ }
+ 
++void AudioSettingsDialog::on_chkKeepMusicSpeed_clicked(bool checked)
++{
++    auto& cfg = emuInstance->getGlobalConfig();
++    cfg.SetBool("Audio.KeepMusicSpeed", checked);
++
++    emit updateAudioSettings();
++}
++
+ void AudioSettingsDialog::onChangeMicMode(int mode)
+ {
+     bool iswav = (mode == 3);
+diff --git a/src/frontend/qt_sdl/AudioSettingsDialog.h b/src/frontend/qt_sdl/AudioSettingsDialog.h
+index 946e47f..f541b89 100644
+--- a/src/frontend/qt_sdl/AudioSettingsDialog.h
++++ b/src/frontend/qt_sdl/AudioSettingsDialog.h
+@@ -68,6 +68,7 @@ private slots:
+     void on_cbBitDepth_currentIndexChanged(int idx);
+     void on_slVolume_valueChanged(int val);
+     void on_chkSyncDSiVolume_clicked(bool checked);
++    void on_chkKeepMusicSpeed_clicked(bool checked);
+     void onChangeMicMode(int mode);
+     void on_btnMicWavBrowse_clicked();
+ 
+@@ -80,6 +81,7 @@ private:
+     int oldBitDepth;
+     int oldVolume;
+     bool oldDSiSync;
++    bool oldKeepMusicSpeed;
+     QButtonGroup* grpMicMode;
+ 
+     int volume;
+diff --git a/src/frontend/qt_sdl/AudioSettingsDialog.ui b/src/frontend/qt_sdl/AudioSettingsDialog.ui
+index 380197e..bc38897 100644
+--- a/src/frontend/qt_sdl/AudioSettingsDialog.ui
++++ b/src/frontend/qt_sdl/AudioSettingsDialog.ui
+@@ -69,6 +69,16 @@
+          </property>
+         </widget>
+       </item>
++      <item row="4" column="0" colspan="2">
++       <widget class="QCheckBox" name="chkKeepMusicSpeed">
++        <property name="whatsThis">
++         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;While fast-forwarding or in slow motion, runs the DS sound hardware (ARM7 timers and SPU) on real time, so music and sound effects keep their normal speed and pitch while the game runs faster or slower.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
++        </property>
++        <property name="text">
++         <string>Keep music at normal speed when fast-forwarding / in slow motion</string>
++        </property>
++       </widget>
++      </item>
+       <item row="0" column="0">
+        <widget class="QLabel" name="label_2">
+         <property name="text">
+diff --git a/src/frontend/qt_sdl/Config.cpp b/src/frontend/qt_sdl/Config.cpp
+index f767fcc..85a3ed3 100644
+--- a/src/frontend/qt_sdl/Config.cpp
++++ b/src/frontend/qt_sdl/Config.cpp
+@@ -111,6 +111,7 @@ DefaultList<bool> DefaultBools =
+ #endif
+ #endif
+     {"DSi.DSP.HLE", true},
++    {"Audio.KeepMusicSpeed", true},
+ };
+ 
+ DefaultList<std::string> DefaultStrings =
+diff --git a/src/frontend/qt_sdl/EmuInstance.h b/src/frontend/qt_sdl/EmuInstance.h
+index f143496..9b4acb3 100755
+--- a/src/frontend/qt_sdl/EmuInstance.h
++++ b/src/frontend/qt_sdl/EmuInstance.h
+@@ -20,6 +20,7 @@
+ #define EMUINSTANCE_H
+ 
+ #include <SDL2/SDL.h>
++#include <atomic>
+ 
+ #include "Platform.h"
+ #include "main.h"
+@@ -225,6 +226,7 @@ private:
+     void audioMute();
+     void audioSync();
+     void audioUpdateSettings();
++    void audioUpdateMusicClock(bool speedChanged);
+ 
+     void micOpen();
+     void micClose();
+@@ -300,6 +302,7 @@ public:
+     bool fastForwardToggled;
+     bool slowmoToggled;
+     bool doAudioSync;
++    bool audioKeepMusicSpeed;
+ private:
+ 
+     std::unique_ptr<melonDS::Savestate> backupState;
+@@ -314,6 +317,12 @@ private:
+     int audioBufSize;
+     float audioSampleFrac;
+     bool audioMuted;
++
++    // keep music at normal speed while fast-forwarding / in slow motion
++    std::atomic<bool> musicClockActive; // also read by the audio callback
++    double musicMeasuredRatio;
++    double musicLastTime;
++
+     SDL_cond* audioSyncCond;
+     SDL_mutex* audioSyncLock;
+ 
+diff --git a/src/frontend/qt_sdl/EmuInstanceAudio.cpp b/src/frontend/qt_sdl/EmuInstanceAudio.cpp
+index 40656de..f012d1d 100644
+--- a/src/frontend/qt_sdl/EmuInstanceAudio.cpp
++++ b/src/frontend/qt_sdl/EmuInstanceAudio.cpp
+@@ -35,6 +35,10 @@ void EmuInstance::audioInit()
+ {
+     audioVolume = localCfg.GetInt("Audio.Volume");
+     audioDSiVolumeSync = localCfg.GetBool("Audio.DSiVolumeSync");
++    audioKeepMusicSpeed = globalCfg.GetBool("Audio.KeepMusicSpeed");
++    musicClockActive = false;
++    musicMeasuredRatio = 1.0;
++    musicLastTime = 0.0;
+ 
+     audioMuted = false;
+     audioSyncCond = SDL_CreateCond();
+@@ -139,6 +143,10 @@ void EmuInstance::audioSync()
+ 
+ int EmuInstance::audioGetNumSamplesOut(int outlen)
+ {
++    // the sound clock is already scaled to real time (audioUpdateMusicClock)
++    if (musicClockActive)
++        return outlen;
++
+     float f_len_in = outlen * (curFPS/targetFPS);
+     f_len_in += audioSampleFrac;
+     int len_in = (int)floor(f_len_in);
+@@ -494,10 +502,61 @@ void EmuInstance::audioUpdateSettings()
+         nds->SPU.SetInterpolation(static_cast<AudioInterpolation>(audiointerp));
+     }
+ 
++    audioKeepMusicSpeed = globalCfg.GetBool("Audio.KeepMusicSpeed");
++
+     setupMicInputData();
+     if (micStarted) micOpen();
+ }
+ 
++// Keep music at normal speed while fast-forwarding or in slow motion.
++// The DS plays music on the ARM7: a periodic alarm (ARM7 timers) steps the
++// sequencer, and the SPU plays the notes. Running both at 1/ratio of emulated
++// time, where ratio is how much faster than real time the emulation runs,
++// puts them back on real time -- while the game logic still runs fast.
++// Called once per emulated frame.
++void EmuInstance::audioUpdateMusicClock(bool speedChanged)
++{
++    double now = SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency();
++
++    if (!speedChanged || !audioKeepMusicSpeed || !nds)
++    {
++        musicClockActive = false;
++        if (nds) nds->SetSoundClockRate(1.0);
++        return;
++    }
++
++    // one emulated frame is 1/INTERNAL_FRAME_RATE seconds of DS time
++    double nominal = curFPS / INTERNAL_FRAME_RATE;
++    if (!musicClockActive)
++    {
++        musicClockActive = true;
++        musicMeasuredRatio = nominal;
++    }
++    else
++    {
++        // how fast the emulation actually runs (it may not reach the target)
++        double dt = now - musicLastTime;
++        if (dt > 0.0 && dt < 0.5)
++            musicMeasuredRatio += ((1.0 / dt) / INTERNAL_FRAME_RATE - musicMeasuredRatio) * 0.05;
++    }
++    musicLastTime = now;
++
++    double ratio = std::min(nominal, musicMeasuredRatio);
++
++    // nudge toward a steady amount of buffered audio: too much buffered ->
++    // produce less audio per frame (higher ratio), too little -> more.
++    // This only changes how much sound time one emulated frame covers; the
++    // sequencer and the SPU both run on the scaled clock, so what is heard
++    // keeps its tempo and pitch whatever the ratio.
++    double target = audioFreq / INTERNAL_FRAME_RATE + audioBufSize / 2;
++    double fill = nds->SPU.GetOutputSize();
++    ratio *= std::clamp(1.0 + 0.25 * (fill - target) / target, 0.8, 1.25);
++
++    // the default fast-forward target (1000 FPS) is ~16.7x, so leave headroom
++    ratio = std::clamp(ratio, 1.0 / 16.0, 64.0);
++    nds->SetSoundClockRate(1.0 / ratio);
++}
++
+ void EmuInstance::audioEnable()
+ {
+     if (audioDevice) SDL_PauseAudioDevice(audioDevice, 0);
+diff --git a/src/frontend/qt_sdl/EmuThread.cpp b/src/frontend/qt_sdl/EmuThread.cpp
+index e754d98..6318a59 100755
+--- a/src/frontend/qt_sdl/EmuThread.cpp
++++ b/src/frontend/qt_sdl/EmuThread.cpp
+@@ -368,6 +368,8 @@ void EmuThread::run()
+             else if (!emuInstance->doLimitFPS && !emuInstance->doAudioSync) emuInstance->curFPS = 1000.0;
+             else emuInstance->curFPS = emuInstance->targetFPS;
+ 
++            emuInstance->audioUpdateMusicClock(fastforward || slowmo);
++
+             if (emuInstance->audioDSiVolumeSync && emuInstance->nds->ConsoleType == 1)
+             {
+                 DSi* dsi = static_cast<DSi*>(emuInstance->nds);
+diff --git a/src/frontend/qt_sdl/Window.cpp b/src/frontend/qt_sdl/Window.cpp
+index 9b3ab95..4afda5c 100755
+--- a/src/frontend/qt_sdl/Window.cpp
++++ b/src/frontend/qt_sdl/Window.cpp
+@@ -1975,6 +1975,8 @@ void MainWindow::onUpdateAudioVolume(int vol, int dsisync)
+ 
+ void MainWindow::onUpdateAudioSettings()
+ {
++    emuInstance->audioKeepMusicSpeed = globalCfg.GetBool("Audio.KeepMusicSpeed");
++
+     if (!emuThread->emuIsActive()) return;
+     assert(emuInstance->nds != nullptr);
+ 

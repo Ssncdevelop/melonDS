@@ -368,6 +368,8 @@ void EmuThread::run()
             else if (!emuInstance->doLimitFPS && !emuInstance->doAudioSync) emuInstance->curFPS = 1000.0;
             else emuInstance->curFPS = emuInstance->targetFPS;
 
+            emuInstance->audioUpdateMusicClock(fastforward || slowmo);
+
             if (emuInstance->audioDSiVolumeSync && emuInstance->nds->ConsoleType == 1)
             {
                 DSi* dsi = static_cast<DSi*>(emuInstance->nds);

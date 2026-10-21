@@ -855,12 +855,22 @@ void SPU::Mix(u32 spucycles)
     s32 left = 0, right = 0;
     s32 leftoutput = 0, rightoutput = 0;
 
+    // sound clock: channels, capture and the output timeline advance by the
+    // scaled cycle count (see NDS::SetSoundClockRate)
+    u32 cycles = spucycles;
+    if (ClockRate != 0x10000)
+    {
+        u64 scaled = (u64)spucycles * ClockRate + ClockFrac;
+        cycles = (u32)(scaled >> 16);
+        ClockFrac = (u32)(scaled & 0xFFFF);
+    }
+
     if (Cnt & (1<<15))
     {
-        s32 ch0 = Channels[0].DoRun(spucycles);
-        s32 ch1 = Channels[1].DoRun(spucycles);
-        s32 ch2 = Channels[2].DoRun(spucycles);
-        s32 ch3 = Channels[3].DoRun(spucycles);
+        s32 ch0 = Channels[0].DoRun(cycles);
+        s32 ch1 = Channels[1].DoRun(cycles);
+        s32 ch2 = Channels[2].DoRun(cycles);
+        s32 ch3 = Channels[3].DoRun(cycles);
 
         // TODO: addition from capture registers
         Channels[0].PanOutput(ch0, left, right);
@@ -873,7 +883,7 @@ void SPU::Mix(u32 spucycles)
         {
             SPUChannel* chan = &Channels[i];
 
-            s32 channel = chan->DoRun(spucycles);
+            s32 channel = chan->DoRun(cycles);
             chan->PanOutput(channel, left, right);
         }
 
@@ -888,7 +898,7 @@ void SPU::Mix(u32 spucycles)
             if      (val < -0x8000) val = -0x8000;
             else if (val > 0x7FFF)  val = 0x7FFF;
 
-            Capture[0].Run(spucycles, val);
+            Capture[0].Run(cycles, val);
         }
 
         if (Capture[1].Cnt & (1<<7))
@@ -899,7 +909,7 @@ void SPU::Mix(u32 spucycles)
             if      (val < -0x8000) val = -0x8000;
             else if (val > 0x7FFF)  val = 0x7FFF;
 
-            Capture[1].Run(spucycles, val);
+            Capture[1].Run(cycles, val);
         }
 
         // final output
@@ -984,7 +994,7 @@ void SPU::Mix(u32 spucycles)
         output[1] = (s16)std::clamp(rightoutput, -0x8000, 0x7FFF);
     }
 
-    NDS.Mic.Advance(spucycles << 1);
+    NDS.Mic.Advance(cycles << 1);
 
     if (NDS.ConsoleType == 1)
     {
@@ -1000,7 +1010,7 @@ void SPU::Mix(u32 spucycles)
         output[1] &= 0xFFC0;
     }
 
-    BlipTimer += spucycles;
+    BlipTimer += cycles;
     if (BlipTimer >= 8191 * 512)
         BlipTimer = 8191 * 512;
 
