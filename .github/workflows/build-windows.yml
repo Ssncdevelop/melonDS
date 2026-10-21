@@ -42,15 +42,21 @@ jobs:
       uses: lukka/run-vcpkg@v11
       with:
         vcpkgJsonGlob: vcpkg.json
+    # MSYS2's login shell sets PKG_CONFIG_PATH to its own /ucrt64 packages. MSYS2's
+    # cmake pulls in MSYS2's libarchive, whose static library expects zlib as a DLL,
+    # and pkg-config would find it before vcpkg's: the static link then fails on
+    # __imp_inflate*. Without the variable, pkg-config sees only vcpkg's packages.
     - name: Configure
-      run: cmake --preset=release-mingw-x86_64 -DMELONDS_EMBED_BUILD_INFO=ON
+      run: unset PKG_CONFIG_PATH; cmake --preset=release-mingw-x86_64 -DMELONDS_EMBED_BUILD_INFO=ON
     - name: Build
-      run: cmake --build --preset=release-mingw-x86_64
+      run: unset PKG_CONFIG_PATH; cmake --build --preset=release-mingw-x86_64
     - uses: actions/upload-artifact@v4
       with:
         name: melonDS-windows-x86_64
         path: .\build\release-mingw-x86_64\melonDS.exe
     - name: Save vcpkg cache
+      # also when the build fails, so a retry does not compile Qt again
+      if: always()
       uses: actions/cache/save@v4
       with:
         path: ${{ github.workspace }}/vcpkg_cache
